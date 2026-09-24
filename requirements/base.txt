@@ -1,3 +1,5 @@
 Django
 psycopg[binary]
 python-dotenv
+djangorestframework
+djangorestframework-simplejwt
