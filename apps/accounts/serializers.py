@@ -24,7 +24,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         return User.objects.create_user(**validated_data)
 
 
-class UserSerializer(serializers.ModelSerializer):
+class CompanyUserSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(
         source="company.name",
         read_only=True,
