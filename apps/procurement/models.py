@@ -121,3 +121,116 @@ class Approval(models.Model):
             f"{self.purchase_request} "
             f"{self.status} by {self.approver}"
         )
+
+class RFQ(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Draft"
+        SENT = "SENT", "Sent"
+        CLOSED = "CLOSED", "Closed"
+
+    purchase_request = models.OneToOneField(
+        PurchaseRequest,
+        on_delete=models.PROTECT,
+        related_name="rfq",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_rfqs",
+    )
+
+    suppliers = models.ManyToManyField(
+        "suppliers.Supplier",
+        related_name="rfqs",
+    )
+
+    deadline = models.DateTimeField()
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return f"RFQ-{self.id} for {self.purchase_request}"
+
+
+class SupplierQuote(models.Model):
+
+    class Status(models.TextChoices):
+        SUBMITTED = "SUBMITTED", "Submitted"
+        SELECTED = "SELECTED", "Selected"
+        REJECTED = "REJECTED", "Rejected"
+
+    rfq = models.ForeignKey(
+        RFQ,
+        on_delete=models.CASCADE,
+        related_name="quotes",
+    )
+
+    supplier = models.ForeignKey(
+        "suppliers.Supplier",
+        on_delete=models.PROTECT,
+        related_name="quotes",
+    )
+
+    total_amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+    )
+
+    currency = models.CharField(
+        max_length=10,
+        default="USD",
+    )
+
+    delivery_days = models.PositiveIntegerField()
+
+    payment_terms = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    warranty = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    attachment = models.FileField(
+        upload_to="quotes/",
+        blank=True,
+        null=True,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.SUBMITTED,
+    )
+
+    submitted_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["rfq", "supplier"],
+                name="unique_supplier_quote_per_rfq",
+            )
+        ]
+
+    def __str__(self):
+        return f"Quote-{self.id} from {self.supplier}"
+
+    

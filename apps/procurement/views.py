@@ -5,8 +5,10 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
-from .models import Approval, PurchaseRequest
-from .serializers import PurchaseRequestSerializer
+from .models import Approval, PurchaseRequest, RFQ, SupplierQuote
+from .permissions import CanManageProcurement
+
+from .serializers import PurchaseRequestSerializer, RFQSerializer, SupplierQuoteSerializer
 
 
 class PurchaseRequestViewSet(viewsets.ModelViewSet):
@@ -237,3 +239,238 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         return Response(
             self.get_serializer(purchase_request).data
         )
+
+class RFQViewSet(viewsets.ModelViewSet):
+
+    serializer_class = RFQSerializer
+
+    permission_classes = [
+        permissions.IsAuthenticated,
+        CanManageProcurement,
+    ]
+
+    http_method_names = [
+        "get",
+        "post",
+        "head",
+        "options",
+    ]
+
+    def get_queryset(self):
+
+        return (
+            RFQ.objects
+            .filter(
+                purchase_request__company=self.request.user.company
+            )
+            .select_related(
+                "purchase_request",
+                "created_by",
+            )
+            .prefetch_related(
+                "suppliers",
+                "quotes",
+                "quotes__supplier",
+            )
+            .order_by("-created_at")
+        )
+
+    def perform_create(self, serializer):
+
+        serializer.save(
+            created_by=self.request.user
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+    )
+    def send(self, request, pk=None):
+
+        rfq = self.get_object()
+
+        if rfq.status != RFQ.Status.DRAFT:
+            return Response(
+                {
+                    "detail": (
+                        "Only draft RFQs can be sent."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not rfq.suppliers.exists():
+            return Response(
+                {
+                    "detail": (
+                        "RFQ must contain at least "
+                        "one supplier."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        rfq.status = RFQ.Status.SENT
+
+        rfq.save(
+            update_fields=[
+                "status",
+                "updated_at",
+            ]
+        )
+
+        return Response(
+            self.get_serializer(rfq).data
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+    )
+    def quotes(self, request, pk=None):
+
+        rfq = self.get_object()
+
+        quotes = (
+            rfq.quotes
+            .select_related("supplier")
+            .order_by(
+                "total_amount",
+                "delivery_days",
+            )
+        )
+
+        serializer = SupplierQuoteSerializer(
+            quotes,
+            many=True,
+            context={
+                "request": request,
+            },
+        )
+
+        return Response(serializer.data)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"quotes/(?P<quote_id>\d+)/select",
+    )
+    @transaction.atomic
+    def select_quote(
+        self,
+        request,
+        pk=None,
+        quote_id=None,
+    ):
+
+        rfq = self.get_object()
+
+        if rfq.status != RFQ.Status.SENT:
+            return Response(
+                {
+                    "detail": (
+                        "A quote can only be selected "
+                        "from a sent RFQ."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            selected_quote = (
+                SupplierQuote.objects
+                .select_related("supplier")
+                .get(
+                    pk=quote_id,
+                    rfq=rfq,
+                )
+            )
+
+        except SupplierQuote.DoesNotExist:
+
+            return Response(
+                {
+                    "detail": (
+                        "Quote not found for this RFQ."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if rfq.quotes.filter(
+            status=SupplierQuote.Status.SELECTED
+        ).exists():
+            return Response(
+                {
+                    "detail": (
+                        "A quote has already been selected."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        rfq.quotes.exclude(
+            pk=selected_quote.pk
+        ).update(
+            status=SupplierQuote.Status.REJECTED
+        )
+
+        selected_quote.status = (
+            SupplierQuote.Status.SELECTED
+        )
+
+        selected_quote.save(
+            update_fields=["status"]
+        )
+
+        rfq.status = RFQ.Status.CLOSED
+
+        rfq.save(
+            update_fields=[
+                "status",
+                "updated_at",
+            ]
+        )
+
+        return Response(
+            SupplierQuoteSerializer(
+                selected_quote,
+                context={
+                    "request": request,
+                },
+            ).data
+        )
+
+
+class SupplierQuoteViewSet(viewsets.ModelViewSet):
+
+    serializer_class = SupplierQuoteSerializer
+
+    permission_classes = [
+        permissions.IsAuthenticated,
+        CanManageProcurement,
+    ]
+
+    http_method_names = [
+        "get",
+        "post",
+        "head",
+        "options",
+    ]
+
+    def get_queryset(self):
+
+        return (
+            SupplierQuote.objects
+            .filter(
+                rfq__purchase_request__company=(
+                    self.request.user.company
+                )
+            )
+            .select_related(
+                "rfq",
+                "supplier",
+                "rfq__purchase_request",
+            )
+            .order_by("-submitted_at")
+        )    
