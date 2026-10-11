@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import transaction
 from rest_framework import serializers
 
@@ -7,6 +8,10 @@ from .models import (
     PurchaseRequestItem,
     RFQ,
     SupplierQuote,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    Receiving,
+    ReceivingItem,
 )
 
 
@@ -295,3 +300,94 @@ class RFQSerializer(serializers.ModelSerializer):
                 )
 
         return attrs    
+
+class PurchaseOrderItemInputSerializer(serializers.Serializer):
+    purchase_request_item_id = serializers.IntegerField(min_value=1)
+    ordered_quantity = serializers.IntegerField(min_value=1)
+    unit_price = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        min_value=0.01,
+    )
+
+
+class PurchaseOrderCreateSerializer(serializers.Serializer):
+    selected_quote_id = serializers.IntegerField(min_value=1)
+    expected_delivery_date = serializers.DateField()
+    items = PurchaseOrderItemInputSerializer(many=True)
+
+    def validate_items(self, value):
+        ids = [item["purchase_request_item_id"] for item in value]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError("Duplicate items.")
+        return value
+
+
+class PurchaseOrderItemSerializer(serializers.ModelSerializer):
+    line_total = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+
+    class Meta:
+        model = PurchaseOrderItem
+        fields = [
+            "id",
+            "item_name",
+            "ordered_quantity",
+            "unit_price",
+            "line_total",
+        ]
+
+
+class PurchaseOrderSerializer(serializers.ModelSerializer):
+    items = PurchaseOrderItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PurchaseOrder
+        fields = [
+            "id",
+            "order_number",
+            "purchase_request",
+            "selected_quote",
+            "supplier",
+            "total_amount",
+            "expected_delivery_date",
+            "status",
+            "items",
+            "created_at",
+        ]
+
+
+class ReceivingItemInputSerializer(serializers.Serializer):
+    purchase_order_item_id = serializers.IntegerField(min_value=1)
+    received_quantity = serializers.IntegerField(min_value=1)
+
+
+class ReceivingCreateSerializer(serializers.Serializer):
+    items = ReceivingItemInputSerializer(many=True)
+
+
+class ReceivingItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReceivingItem
+        fields = [
+            "purchase_order_item",
+            "received_quantity",
+        ]
+
+
+class ReceivingSerializer(serializers.ModelSerializer):
+    items = ReceivingItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Receiving
+        fields = [
+            "id",
+            "purchase_order",
+            "received_by",
+            "received_at",
+            "items",
+        ]
+    

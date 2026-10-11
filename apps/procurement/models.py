@@ -1,6 +1,7 @@
 from decimal import Decimal
-
 from django.conf import settings
+from django.core.validators import MinValueValidator
+import uuid
 from django.db import models
 
 
@@ -232,5 +233,110 @@ class SupplierQuote(models.Model):
 
     def __str__(self):
         return f"Quote-{self.id} from {self.supplier}"
+
+class PurchaseOrder(models.Model):
+    class Status(models.TextChoices):
+        OPEN = "OPEN", "Open"
+        PARTIALLY_RECEIVED = "PARTIALLY_RECEIVED", "Partially Received"
+        COMPLETED = "COMPLETED", "Completed"
+
+    purchase_request = models.OneToOneField(
+        "procurement.PurchaseRequest",
+        on_delete=models.PROTECT,
+        related_name="purchase_order",
+    )
+    selected_quote = models.OneToOneField(
+        "procurement.SupplierQuote",
+        on_delete=models.PROTECT,
+        related_name="purchase_order",
+    )
+    supplier = models.ForeignKey(
+        "suppliers.Supplier",
+        on_delete=models.PROTECT,
+        related_name="purchase_orders",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_purchase_orders",
+    )
+    order_number = models.CharField(
+        max_length=50,
+        unique=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    total_amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+    )
+    expected_delivery_date = models.DateField()
+    status = models.CharField(
+        max_length=30,
+        choices=Status.choices,
+        default=Status.OPEN,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return str(self.order_number)
+
+
+class PurchaseOrderItem(models.Model):
+    purchase_order = models.ForeignKey(
+        PurchaseOrder,
+        on_delete=models.PROTECT,
+        related_name="items",
+    )
+    item_name = models.CharField(max_length=255)
+    ordered_quantity = models.PositiveIntegerField(
+        validators=[MinValueValidator(1)]
+    )
+    unit_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+
+    @property
+    def line_total(self):
+        return self.ordered_quantity * self.unit_price
+
+
+class Receiving(models.Model):
+    purchase_order = models.ForeignKey(
+        PurchaseOrder,
+        on_delete=models.PROTECT,
+        related_name="receivings",
+    )
+    received_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+    )
+    received_at = models.DateTimeField(auto_now_add=True)
+
+
+class ReceivingItem(models.Model):
+    receiving = models.ForeignKey(
+        Receiving,
+        on_delete=models.PROTECT,
+        related_name="items",
+    )
+    purchase_order_item = models.ForeignKey(
+        PurchaseOrderItem,
+        on_delete=models.PROTECT,
+        related_name="receiving_items",
+    )
+    received_quantity = models.PositiveIntegerField(
+        validators=[MinValueValidator(1)]
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["receiving", "purchase_order_item"],
+                name="unique_item_per_receiving",
+            )
+        ]
 
     

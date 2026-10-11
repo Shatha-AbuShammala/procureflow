@@ -4,6 +4,7 @@ from .views import (
     PurchaseRequestViewSet,
     RFQViewSet,
     SupplierQuoteViewSet,
+    PurchaseOrderViewSet,
 )
 
 
@@ -26,6 +27,10 @@ router.register(
     SupplierQuoteViewSet,
     basename="quote",
 )
-
+router.register(
+    r"purchase-orders",
+    PurchaseOrderViewSet,
+    basename="purchase-order",
+)
 
 urlpatterns = router.urls

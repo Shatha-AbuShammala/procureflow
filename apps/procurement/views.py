@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.shortcuts import get_object_or_404
 
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -7,8 +8,12 @@ from rest_framework.response import Response
 
 from .models import Approval, PurchaseRequest, RFQ, SupplierQuote
 from .permissions import CanManageProcurement
+from .models import PurchaseOrder, SupplierQuote
 
-from .serializers import PurchaseRequestSerializer, RFQSerializer, SupplierQuoteSerializer
+from .serializers import (PurchaseRequestSerializer, RFQSerializer, SupplierQuoteSerializer, 
+PurchaseOrderSerializer, PurchaseOrderCreateSerializer, ReceivingCreateSerializer, ReceivingSerializer)
+from rest_framework.permissions import IsAuthenticated
+from .services import create_purchase_order, receive_purchase_order
 
 
 class PurchaseRequestViewSet(viewsets.ModelViewSet):
@@ -474,3 +479,83 @@ class SupplierQuoteViewSet(viewsets.ModelViewSet):
             )
             .order_by("-submitted_at")
         )    
+
+class PurchaseOrderViewSet(viewsets.GenericViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return PurchaseOrder.objects.filter(
+            purchase_request__company=self.request.user.company
+        ).select_related(
+            "purchase_request", "supplier", "selected_quote"
+        ).prefetch_related("items")
+
+    def _can_manage(self):
+        return self.request.user.role in [
+            "PROCUREMENT_OFFICER",
+            "ADMIN",
+        ]
+
+    def list(self, request):
+        queryset = self.get_queryset()
+        return Response(
+            PurchaseOrderSerializer(queryset, many=True).data
+        )
+
+    def retrieve(self, request, pk=None):
+        po = self.get_object()
+        return Response(PurchaseOrderSerializer(po).data)
+
+    def create(self, request):
+        if not self._can_manage():
+            return Response(
+                {"detail": "Permission denied."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = PurchaseOrderCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        quote = get_object_or_404(
+            SupplierQuote,
+            pk=data["selected_quote_id"],
+            rfq__purchase_request__company=request.user.company,
+        )
+
+        po = create_purchase_order(
+            user=request.user,
+            quote_id=quote.id,
+            expected_date=data["expected_delivery_date"],
+            items=data["items"],
+        )
+
+        return Response(
+            PurchaseOrderSerializer(po).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"])
+    def receive(self, request, pk=None):
+        if not self._can_manage():
+            return Response(
+                {"detail": "Permission denied."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        po = self.get_object()
+
+        serializer = ReceivingCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        receiving = receive_purchase_order(
+            user=request.user,
+            po_id=po.id,
+            items=serializer.validated_data["items"],
+        )
+
+        return Response(
+            ReceivingSerializer(receiving).data,
+            status=status.HTTP_201_CREATED,
+        )
+    
