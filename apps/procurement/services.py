@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import Sum
+from apps.notifications.tasks import send_purchase_order_notification
 from rest_framework.exceptions import ValidationError
 
 from .models import (
@@ -81,6 +82,8 @@ def create_purchase_order(*, user, quote_id, expected_date, items):
         )
         for submitted, original in zip(items, pr_items)
     ])
+    transaction.on_commit(
+    lambda po_id=po.id: send_purchase_order_notification.delay(po_id))
 
     return po
 

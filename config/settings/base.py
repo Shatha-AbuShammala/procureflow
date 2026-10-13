@@ -13,6 +13,8 @@ import os
 
 from dotenv import load_dotenv
 from pathlib import Path
+from celery.schedules import crontab
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -45,6 +47,8 @@ INSTALLED_APPS = [
     "apps.companies",
     "apps.suppliers",
     "apps.procurement",
+    "django_celery_beat",
+    "apps.notifications",
 ]
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -138,3 +142,33 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+CELERY_BROKER_URL = os.environ.get(
+    "CELERY_BROKER_URL",
+    "redis://127.0.0.1:6379/0",
+)
+
+CELERY_RESULT_BACKEND = os.environ.get(
+    "CELERY_RESULT_BACKEND",
+    "redis://127.0.0.1:6379/1",
+)
+
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TIMEZONE = "UTC"
+CELERY_ENABLE_UTC = True
+
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 120
+
+CELERY_BEAT_SCHEDULER = (
+    "django_celery_beat.schedulers:DatabaseScheduler"
+)
+
+CELERY_BEAT_SCHEDULE = {
+    "remind-expiring-rfqs-hourly": {
+        "task": "notifications.tasks.remind_expiring_rfqs",
+        "schedule": crontab(minute=0),
+    },
+}
