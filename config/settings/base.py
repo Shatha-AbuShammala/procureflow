@@ -27,10 +27,18 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv(
+        "DJANGO_ALLOWED_HOSTS",
+        "127.0.0.1,localhost",
+    ).split(",")
+    if host.strip()
+]
 
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Application definition
 
@@ -49,6 +57,8 @@ INSTALLED_APPS = [
     "apps.procurement",
     "django_celery_beat",
     "apps.notifications",
+    "apps.audit",
+    "drf_spectacular",
 ]
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -168,7 +178,19 @@ CELERY_BEAT_SCHEDULER = (
 
 CELERY_BEAT_SCHEDULE = {
     "remind-expiring-rfqs-hourly": {
-        "task": "notifications.tasks.remind_expiring_rfqs",
+        "task": "apps.notifications.tasks.remind_expiring_rfqs",
         "schedule": crontab(minute=0),
     },
+}
+
+REST_FRAMEWORK = {
+    **globals().get("REST_FRAMEWORK", {}),
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "ProcureFlow API",
+    "DESCRIPTION": "B2B Procurement Management REST API",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
