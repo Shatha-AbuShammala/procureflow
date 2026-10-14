@@ -1,6 +1,6 @@
-
+from apps.audit.models import AuditLog
+from apps.audit.services import log_action
 from decimal import Decimal
-
 from django.db import transaction
 from django.db.models import Sum
 from apps.notifications.tasks import send_purchase_order_notification
@@ -82,6 +82,16 @@ def create_purchase_order(*, user, quote_id, expected_date, items):
         )
         for submitted, original in zip(items, pr_items)
     ])
+    log_action(
+    actor=user,
+    action=AuditLog.Action.CREATE,
+    entity=po,
+    new_values={
+        "status": str(po.status),
+        "supplier_id": po.supplier_id,
+        "total_amount": str(po.total_amount),
+    },
+)
     transaction.on_commit(
     lambda po_id=po.id: send_purchase_order_notification.delay(po_id))
 
@@ -90,12 +100,12 @@ def create_purchase_order(*, user, quote_id, expected_date, items):
 
 @transaction.atomic
 def receive_purchase_order(*, user, po_id, items):
-    # Lock the parent row to serialize receiving operations.
     po = (
         PurchaseOrder.objects
         .select_for_update()
         .get(pk=po_id, purchase_request__company_id=user.company_id)
     )
+    old_status = po.status
 
     if po.status == PurchaseOrder.Status.COMPLETED:
         raise ValidationError("Purchase order is already completed.")
@@ -164,5 +174,17 @@ def receive_purchase_order(*, user, po_id, items):
         else PurchaseOrder.Status.PARTIALLY_RECEIVED
     )
     po.save(update_fields=["status"])
+    log_action(
+    actor=user,
+    action=AuditLog.Action.UPDATE,
+    entity=po,
+    old_values={
+        "status": str(old_status),
+    },
+    new_values={
+        "status": str(po.status),
+        "receiving_id": receiving.id,
+    },
+)
 
     return receiving
