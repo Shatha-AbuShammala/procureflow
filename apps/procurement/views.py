@@ -1,14 +1,18 @@
 from django.db import transaction
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema, OpenApiTypes
 
 from apps.audit.models import AuditLog
 from apps.audit.services import log_action
+from apps.accounts.permissions import HasCompany
 
 from .models import Approval, PurchaseOrder, PurchaseRequest, RFQ, SupplierQuote
 from .permissions import CanManageProcurement
@@ -20,27 +24,31 @@ from .serializers import (
     PurchaseOrderCreateSerializer,
     ReceivingCreateSerializer,
     ReceivingSerializer,
+    ApprovalDecisionSerializer,
 )
 from .services import create_purchase_order, receive_purchase_order
 
 
 class PurchaseRequestViewSet(viewsets.ModelViewSet):
     serializer_class = PurchaseRequestSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasCompany]
     http_method_names = ["get", "post", "head", "options"]
     lookup_value_regex = r"\d+"
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return PurchaseRequest.objects.none()
         user = self.request.user
         queryset = (
-            PurchaseRequest.objects
-            .filter(company=user.company)
+            PurchaseRequest.objects.filter(company=user.company)
             .select_related("requester", "approval", "approval__approver")
             .prefetch_related("items")
             .order_by("-created_at")
         )
         if user.role == user.Role.EMPLOYEE:
-            return queryset.filter(requester=user)
+            queryset = queryset.filter(requester=user)
+        if self.action in {"submit", "approve", "reject"}:
+            queryset = queryset.select_for_update(of=("self",))
         return queryset
 
     def perform_create(self, serializer):
@@ -62,6 +70,7 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
                 },
             )
 
+    @extend_schema(request=None, responses=PurchaseRequestSerializer)
     @action(detail=True, methods=["post"])
     @transaction.atomic
     def submit(self, request, pk=None):
@@ -91,6 +100,9 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         )
         return Response(self.get_serializer(purchase_request).data)
 
+    @extend_schema(
+        request=ApprovalDecisionSerializer, responses=PurchaseRequestSerializer
+    )
     @action(detail=True, methods=["post"])
     @transaction.atomic
     def approve(self, request, pk=None):
@@ -106,12 +118,13 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        comment = request.data.get("comment", "")
-        Approval.objects.create(
+        decision = ApprovalDecisionSerializer(data=request.data)
+        decision.is_valid(raise_exception=True)
+        purchase_request.approval = Approval.objects.create(
             purchase_request=purchase_request,
             approver=user,
             status=Approval.Status.APPROVED,
-            comment=comment,
+            comment=decision.validated_data["comment"],
         )
         old_status = purchase_request.status
         purchase_request.status = PurchaseRequest.Status.APPROVED
@@ -125,6 +138,9 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         )
         return Response(self.get_serializer(purchase_request).data)
 
+    @extend_schema(
+        request=ApprovalDecisionSerializer, responses=PurchaseRequestSerializer
+    )
     @action(detail=True, methods=["post"])
     @transaction.atomic
     def reject(self, request, pk=None):
@@ -140,12 +156,13 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        comment = request.data.get("comment", "")
-        Approval.objects.create(
+        decision = ApprovalDecisionSerializer(data=request.data)
+        decision.is_valid(raise_exception=True)
+        purchase_request.approval = Approval.objects.create(
             purchase_request=purchase_request,
             approver=user,
             status=Approval.Status.REJECTED,
-            comment=comment,
+            comment=decision.validated_data["comment"],
         )
         old_status = purchase_request.status
         purchase_request.status = PurchaseRequest.Status.REJECTED
@@ -167,13 +184,17 @@ class RFQViewSet(viewsets.ModelViewSet):
     lookup_value_regex = r"\d+"
 
     def get_queryset(self):
-        return (
-            RFQ.objects
-            .filter(purchase_request__company=self.request.user.company)
+        if getattr(self, "swagger_fake_view", False):
+            return RFQ.objects.none()
+        queryset = (
+            RFQ.objects.filter(purchase_request__company=self.request.user.company)
             .select_related("purchase_request", "created_by")
             .prefetch_related("suppliers", "quotes", "quotes__supplier")
             .order_by("-created_at")
         )
+        if self.action in {"send", "select_quote"}:
+            queryset = queryset.select_for_update(of=("self",))
+        return queryset
 
     def perform_create(self, serializer):
         with transaction.atomic():
@@ -188,6 +209,7 @@ class RFQViewSet(viewsets.ModelViewSet):
                 },
             )
 
+    @extend_schema(request=None, responses=RFQSerializer)
     @action(detail=True, methods=["post"])
     @transaction.atomic
     def send(self, request, pk=None):
@@ -202,6 +224,16 @@ class RFQViewSet(viewsets.ModelViewSet):
                 {"detail": "RFQ must contain at least one supplier."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if rfq.deadline <= timezone.now():
+            raise ValidationError("The RFQ deadline has passed.")
+        if rfq.purchase_request.status != PurchaseRequest.Status.APPROVED:
+            raise ValidationError("The purchase request must be approved.")
+        if rfq.suppliers.exclude(
+            company_id=request.user.company_id, is_active=True
+        ).exists():
+            raise ValidationError(
+                "All invited suppliers must be active and belong to your company."
+            )
 
         old_status = rfq.status
         rfq.status = RFQ.Status.SENT
@@ -215,19 +247,19 @@ class RFQViewSet(viewsets.ModelViewSet):
         )
         return Response(self.get_serializer(rfq).data)
 
+    @extend_schema(responses=SupplierQuoteSerializer(many=True))
     @action(detail=True, methods=["get"])
     def quotes(self, request, pk=None):
         rfq = self.get_object()
-        quotes = (
-            rfq.quotes
-            .select_related("supplier")
-            .order_by("total_amount", "delivery_days")
+        quotes = rfq.quotes.select_related("supplier").order_by(
+            "total_amount", "delivery_days"
         )
         serializer = SupplierQuoteSerializer(
             quotes, many=True, context={"request": request}
         )
         return Response(serializer.data)
 
+    @extend_schema(request=None, responses=SupplierQuoteSerializer)
     @action(
         detail=True,
         methods=["post"],
@@ -243,10 +275,8 @@ class RFQViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            selected_quote = (
-                SupplierQuote.objects
-                .select_related("supplier")
-                .get(pk=quote_id, rfq=rfq)
+            selected_quote = SupplierQuote.objects.select_related("supplier").get(
+                pk=quote_id, rfq=rfq
             )
         except SupplierQuote.DoesNotExist:
             return Response(
@@ -259,7 +289,20 @@ class RFQViewSet(viewsets.ModelViewSet):
                 {"detail": "A quote has already been selected."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if selected_quote.status != SupplierQuote.Status.SUBMITTED:
+            raise ValidationError("Only submitted quotes can be selected.")
+        if (
+            not selected_quote.supplier.is_active
+            or not rfq.suppliers.filter(
+                pk=selected_quote.supplier_id, company_id=request.user.company_id
+            ).exists()
+        ):
+            raise ValidationError(
+                "The selected supplier must be active and invited to this RFQ."
+            )
 
+        old_quote_status = selected_quote.status
+        old_rfq_status = rfq.status
         rfq.quotes.exclude(pk=selected_quote.pk).update(
             status=SupplierQuote.Status.REJECTED
         )
@@ -267,18 +310,23 @@ class RFQViewSet(viewsets.ModelViewSet):
         selected_quote.save(update_fields=["status"])
         rfq.status = RFQ.Status.CLOSED
         rfq.save(update_fields=["status", "updated_at"])
-        old_quote_status = selected_quote.status
         log_action(
-        actor=request.user,
-        action=AuditLog.Action.UPDATE,
-        entity=selected_quote,
-        old_values={"status": old_quote_status},
-        new_values={"status": selected_quote.status},)
+            actor=request.user,
+            action=AuditLog.Action.UPDATE,
+            entity=selected_quote,
+            old_values={"status": old_quote_status},
+            new_values={"status": selected_quote.status},
+        )
+        log_action(
+            actor=request.user,
+            action=AuditLog.Action.UPDATE,
+            entity=rfq,
+            old_values={"status": old_rfq_status},
+            new_values={"status": rfq.status, "selected_quote_id": selected_quote.pk},
+        )
 
         return Response(
-            SupplierQuoteSerializer(
-                selected_quote, context={"request": request}
-            ).data
+            SupplierQuoteSerializer(selected_quote, context={"request": request}).data
         )
 
 
@@ -289,30 +337,65 @@ class SupplierQuoteViewSet(viewsets.ModelViewSet):
     lookup_value_regex = r"\d+"
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return SupplierQuote.objects.none()
         return (
-            SupplierQuote.objects
-            .filter(rfq__purchase_request__company=self.request.user.company)
+            SupplierQuote.objects.filter(
+                rfq__purchase_request__company=self.request.user.company
+            )
             .select_related("rfq", "supplier", "rfq__purchase_request")
             .order_by("-submitted_at")
         )
 
+    @transaction.atomic
+    def perform_create(self, serializer):
+        quote = serializer.save()
+        log_action(
+            actor=self.request.user,
+            action=AuditLog.Action.CREATE,
+            entity=quote,
+            new_values={
+                "rfq_id": quote.rfq_id,
+                "supplier_id": quote.supplier_id,
+                "total_amount": str(quote.total_amount),
+            },
+        )
+
+    @extend_schema(responses={(200, "application/octet-stream"): OpenApiTypes.BINARY})
+    @action(detail=True, methods=["get"])
+    def attachment(self, request, pk=None):
+        quote = self.get_object()
+        if not quote.attachment:
+            raise NotFound("No attachment is available.")
+        try:
+            response = FileResponse(quote.attachment.open("rb"), as_attachment=True)
+        except FileNotFoundError as exc:
+            raise NotFound("Attachment not found.") from exc
+        response["Cache-Control"] = "private, no-store"
+        return response
+
 
 class PurchaseOrderViewSet(viewsets.GenericViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasCompany]
     serializer_class = PurchaseOrderSerializer
     lookup_value_regex = r"\d+"
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return PurchaseOrder.objects.none()
         return (
-            PurchaseOrder.objects
-            .filter(purchase_request__company=self.request.user.company)
+            PurchaseOrder.objects.filter(
+                purchase_request__company=self.request.user.company
+            )
             .select_related("purchase_request", "supplier", "selected_quote")
             .prefetch_related("items")
+            .order_by("-created_at", "-pk")
         )
 
     def _can_manage(self):
         return self.request.user.role in ["PROCUREMENT_OFFICER", "ADMIN"]
 
+    @extend_schema(responses=PurchaseOrderSerializer(many=True))
     def list(self, request):
         queryset = self.get_queryset()
         return Response(PurchaseOrderSerializer(queryset, many=True).data)
@@ -321,6 +404,9 @@ class PurchaseOrderViewSet(viewsets.GenericViewSet):
         po = self.get_object()
         return Response(PurchaseOrderSerializer(po).data)
 
+    @extend_schema(
+        request=PurchaseOrderCreateSerializer, responses={201: PurchaseOrderSerializer}
+    )
     def create(self, request):
         if not self._can_manage():
             return Response(
@@ -347,6 +433,9 @@ class PurchaseOrderViewSet(viewsets.GenericViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+    @extend_schema(
+        request=ReceivingCreateSerializer, responses={201: ReceivingSerializer}
+    )
     @action(detail=True, methods=["post"])
     def receive(self, request, pk=None):
         if not self._can_manage():

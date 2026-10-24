@@ -1,6 +1,7 @@
-
 import pytest
 from decimal import Decimal
+from datetime import timedelta
+from django.utils import timezone
 from apps.procurement.models import Receiving, ReceivingItem
 from rest_framework.test import APIClient
 from concurrent.futures import ThreadPoolExecutor
@@ -40,7 +41,7 @@ def test_cannot_create_po_from_unselected_quote(
     rfq = RFQ.objects.create(
         purchase_request=pr,
         created_by=procurement_officer,
-        deadline="2026-12-01T12:00:00Z",
+        deadline=timezone.now() + timedelta(days=7),
         status=RFQ.Status.SENT,
     )
 
@@ -60,7 +61,9 @@ def test_cannot_create_po_from_unselected_quote(
         "/api/purchase-orders/",
         {
             "selected_quote_id": quote.id,
-            "expected_delivery_date": "2026-12-15",
+            "expected_delivery_date": (
+                timezone.localdate() + timedelta(days=14)
+            ).isoformat(),
             "items": [
                 {
                     "purchase_request_item_id": item.id,
@@ -100,8 +103,8 @@ def test_can_create_po_from_selected_quote(
     rfq = RFQ.objects.create(
         purchase_request=pr,
         created_by=procurement_officer,
-        deadline="2026-12-01T12:00:00Z",
-        status=RFQ.Status.SENT,
+        deadline=timezone.now() + timedelta(days=7),
+        status=RFQ.Status.CLOSED,
     )
 
     quote = SupplierQuote.objects.create(
@@ -120,7 +123,9 @@ def test_can_create_po_from_selected_quote(
         "/api/purchase-orders/",
         {
             "selected_quote_id": quote.id,
-            "expected_delivery_date": "2026-12-15",
+            "expected_delivery_date": (
+                timezone.localdate() + timedelta(days=14)
+            ).isoformat(),
             "items": [
                 {
                     "purchase_request_item_id": item.id,
@@ -175,8 +180,8 @@ def test_partial_receiving(
     rfq = RFQ.objects.create(
         purchase_request=pr,
         created_by=procurement_officer,
-        deadline="2026-12-01T12:00:00Z",
-        status=RFQ.Status.SENT,
+        deadline=timezone.now() + timedelta(days=7),
+        status=RFQ.Status.CLOSED,
     )
 
     quote = SupplierQuote.objects.create(
@@ -195,7 +200,9 @@ def test_partial_receiving(
         "/api/purchase-orders/",
         {
             "selected_quote_id": quote.id,
-            "expected_delivery_date": "2026-12-15",
+            "expected_delivery_date": (
+                timezone.localdate() + timedelta(days=14)
+            ).isoformat(),
             "items": [
                 {
                     "purchase_request_item_id": pr_item.id,
@@ -233,13 +240,14 @@ def test_partial_receiving(
 
     assert po.status == PurchaseOrder.Status.PARTIALLY_RECEIVED
 
-    assert Receiving.objects.filter(
-        purchase_order=po
-    ).count() == 1
+    assert Receiving.objects.filter(purchase_order=po).count() == 1
 
-    assert ReceivingItem.objects.filter(
-        purchase_order_item=po_item
-    ).first().received_quantity == 6
+    assert (
+        ReceivingItem.objects.filter(purchase_order_item=po_item)
+        .first()
+        .received_quantity
+        == 6
+    )
 
 
 @pytest.fixture
@@ -261,8 +269,8 @@ def po_setup(procurement_officer, supplier_a):
     rfq = RFQ.objects.create(
         purchase_request=pr,
         created_by=procurement_officer,
-        deadline="2026-12-01T12:00:00Z",
-        status=RFQ.Status.SENT,
+        deadline=timezone.now() + timedelta(days=7),
+        status=RFQ.Status.CLOSED,
     )
 
     quote = SupplierQuote.objects.create(
@@ -278,12 +286,16 @@ def po_setup(procurement_officer, supplier_a):
 
     payload = {
         "selected_quote_id": quote.id,
-        "expected_delivery_date": "2026-12-15",
-        "items": [{
-            "purchase_request_item_id": pr_item.id,
-            "ordered_quantity": 10,
-            "unit_price": "500.00",
-        }],
+        "expected_delivery_date": (
+            timezone.localdate() + timedelta(days=14)
+        ).isoformat(),
+        "items": [
+            {
+                "purchase_request_item_id": pr_item.id,
+                "ordered_quantity": 10,
+                "unit_price": "500.00",
+            }
+        ],
     }
 
     response = client.post(
@@ -308,10 +320,12 @@ def receive(client, po, po_item, quantity):
     return client.post(
         f"/api/purchase-orders/{po.id}/receive/",
         {
-            "items": [{
-                "purchase_order_item_id": po_item.id,
-                "received_quantity": quantity,
-            }]
+            "items": [
+                {
+                    "purchase_order_item_id": po_item.id,
+                    "received_quantity": quantity,
+                }
+            ]
         },
         format="json",
     )
@@ -335,9 +349,7 @@ def test_full_receiving(po_setup):
 
     total = sum(
         ri.received_quantity
-        for ri in ReceivingItem.objects.filter(
-            purchase_order_item=item
-        )
+        for ri in ReceivingItem.objects.filter(purchase_order_item=item)
     )
     assert total == 10
 
@@ -354,9 +366,7 @@ def test_cannot_receive_more_than_ordered(po_setup):
     second = receive(client, po, item, 5)
 
     assert second.status_code == 400
-    assert Receiving.objects.filter(
-        purchase_order=po
-    ).count() == 1
+    assert Receiving.objects.filter(purchase_order=po).count() == 1
 
     po.refresh_from_db()
     assert po.status == PurchaseOrder.Status.PARTIALLY_RECEIVED
@@ -431,9 +441,7 @@ def test_other_company_cannot_access_po(
 
     po = po_setup["po"]
 
-    response = client.get(
-        f"/api/purchase-orders/{po.id}/"
-    )
+    response = client.get(f"/api/purchase-orders/{po.id}/")
 
     assert response.status_code == 404
 
@@ -488,8 +496,8 @@ def test_concurrent_receiving_does_not_exceed_ordered_quantity(
     rfq = RFQ.objects.create(
         purchase_request=pr,
         created_by=procurement_officer,
-        deadline="2026-12-01T12:00:00Z",
-        status=RFQ.Status.SENT,
+        deadline=timezone.now() + timedelta(days=7),
+        status=RFQ.Status.CLOSED,
     )
 
     quote = SupplierQuote.objects.create(
@@ -507,12 +515,16 @@ def test_concurrent_receiving_does_not_exceed_ordered_quantity(
         "/api/purchase-orders/",
         {
             "selected_quote_id": quote.id,
-            "expected_delivery_date": "2026-12-15",
-            "items": [{
-                "purchase_request_item_id": pr_item.id,
-                "ordered_quantity": 10,
-                "unit_price": "500.00",
-            }],
+            "expected_delivery_date": (
+                timezone.localdate() + timedelta(days=14)
+            ).isoformat(),
+            "items": [
+                {
+                    "purchase_request_item_id": pr_item.id,
+                    "ordered_quantity": 10,
+                    "unit_price": "500.00",
+                }
+            ],
         },
         format="json",
     )
@@ -529,19 +541,19 @@ def test_concurrent_receiving_does_not_exceed_ordered_quantity(
 
         try:
             thread_client = APIClient()
-            thread_client.force_authenticate(
-                user=procurement_officer
-            )
+            thread_client.force_authenticate(user=procurement_officer)
 
             barrier.wait(timeout=10)
 
             result = thread_client.post(
                 f"/api/purchase-orders/{po.id}/receive/",
                 {
-                    "items": [{
-                        "purchase_order_item_id": po_item.id,
-                        "received_quantity": quantity,
-                    }]
+                    "items": [
+                        {
+                            "purchase_order_item_id": po_item.id,
+                            "received_quantity": quantity,
+                        }
+                    ]
                 },
                 format="json",
             )
@@ -563,9 +575,7 @@ def test_concurrent_receiving_does_not_exceed_ordered_quantity(
 
     total_received = sum(
         item.received_quantity
-        for item in ReceivingItem.objects.filter(
-            purchase_order_item=po_item
-        )
+        for item in ReceivingItem.objects.filter(purchase_order_item=po_item)
     )
 
     assert total_received in [5, 7]

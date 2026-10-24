@@ -5,9 +5,13 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     services:
       postgres:
@@ -35,8 +39,11 @@ jobs:
           --health-retries 5
 
     env:
-      DJANGO_SETTINGS_MODULE: config.settings.dev
-      DJANGO_SECRET_KEY: github-actions-test-secret-key-not-for-production
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      DJANGO_SECRET_KEY: github-actions-test-secret-72a81cf652d93b8e7f9822c5431ff6bd
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      CACHE_URL: redis://localhost:6379/2
+      DB_SSLMODE: disable
       DB_NAME: procureflow_test
       DB_USER: procureflow_user
       DB_PASSWORD: test_password
@@ -61,5 +68,30 @@ jobs:
       - name: Django system check
         run: python manage.py check
 
+      - name: Check migration files
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Validate API schema
+        run: python manage.py spectacular --file schema.yml --validate --fail-on-warn
+
+      - name: Production settings and static files
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.prod
+        run: |
+          python manage.py check --deploy --fail-level WARNING
+          python manage.py collectstatic --noinput
+
+      - name: Validate Compose configurations
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose --env-file .env.production.example -f docker-compose.prod.yml config --no-env-resolution --quiet
+
+      - name: Check dependency compatibility
+        run: python -m pip check
+
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Build production image
+        run: docker build --target production -t procureflow:ci .

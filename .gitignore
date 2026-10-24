@@ -7,10 +7,20 @@ __pycache__/
 
 # Environment variables
 .env
+.env.*
+!.env.example
+!.env.production.example
 
 # Django
 *.log
 db.sqlite3
+*.sqlite3
+media/
+staticfiles/
+deploy/certs/
+*.pem
+*.key
+celerybeat-schedule*
 
 # Testing
 .pytest_cache/
