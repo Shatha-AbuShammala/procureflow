@@ -48,12 +48,19 @@ class PurchaseRequest(models.Model):
     @property
     def total_estimated_cost(self):
         return sum(
-            (
-                item.quantity * item.estimated_unit_price
-                for item in self.items.all()
-            ),
+            (item.quantity * item.estimated_unit_price for item in self.items.all()),
             Decimal("0.00"),
         )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    status__in=["DRAFT", "PENDING_APPROVAL", "APPROVED", "REJECTED"]
+                ),
+                name="pr_valid_status",
+            )
+        ]
 
     def __str__(self):
         return f"PR-{self.id} - {self.title}"
@@ -75,12 +82,24 @@ class PurchaseRequestItem(models.Model):
         blank=True,
     )
 
-    quantity = models.PositiveIntegerField()
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 
     estimated_unit_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.00"))],
     )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gte=1), name="pr_item_positive_quantity"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(estimated_unit_price__gte=0),
+                name="pr_item_nonnegative_price",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.item_name} x {self.quantity}"
@@ -117,11 +136,17 @@ class Approval(models.Model):
         auto_now_add=True,
     )
 
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(status__in=["APPROVED", "REJECTED"]),
+                name="approval_valid_status",
+            )
+        ]
+
     def __str__(self):
-        return (
-            f"{self.purchase_request} "
-            f"{self.status} by {self.approver}"
-        )
+        return f"{self.purchase_request} " f"{self.status} by {self.approver}"
+
 
 class RFQ(models.Model):
     class Status(models.TextChoices):
@@ -162,6 +187,14 @@ class RFQ(models.Model):
         auto_now=True,
     )
 
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(status__in=["DRAFT", "SENT", "CLOSED"]),
+                name="rfq_valid_status",
+            )
+        ]
+
     def __str__(self):
         return f"RFQ-{self.id} for {self.purchase_request}"
 
@@ -188,6 +221,7 @@ class SupplierQuote(models.Model):
     total_amount = models.DecimalField(
         max_digits=14,
         decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
     )
 
     currency = models.CharField(
@@ -228,11 +262,24 @@ class SupplierQuote(models.Model):
             models.UniqueConstraint(
                 fields=["rfq", "supplier"],
                 name="unique_supplier_quote_per_rfq",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["rfq"],
+                condition=models.Q(status="SELECTED"),
+                name="one_selected_quote_per_rfq",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(total_amount__gt=0), name="quote_positive_total"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(status__in=["SUBMITTED", "SELECTED", "REJECTED"]),
+                name="quote_valid_status",
+            ),
         ]
 
     def __str__(self):
         return f"Quote-{self.id} from {self.supplier}"
+
 
 class PurchaseOrder(models.Model):
     class Status(models.TextChoices):
@@ -269,6 +316,7 @@ class PurchaseOrder(models.Model):
     total_amount = models.DecimalField(
         max_digits=14,
         decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
     )
     expected_delivery_date = models.DateField()
     status = models.CharField(
@@ -277,6 +325,19 @@ class PurchaseOrder(models.Model):
         default=Status.OPEN,
     )
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(total_amount__gt=0), name="po_positive_total"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    status__in=["OPEN", "PARTIALLY_RECEIVED", "COMPLETED"]
+                ),
+                name="po_valid_status",
+            ),
+        ]
 
     def __str__(self):
         return str(self.order_number)
@@ -289,14 +350,23 @@ class PurchaseOrderItem(models.Model):
         related_name="items",
     )
     item_name = models.CharField(max_length=255)
-    ordered_quantity = models.PositiveIntegerField(
-        validators=[MinValueValidator(1)]
-    )
+    ordered_quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
     unit_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         validators=[MinValueValidator(Decimal("0.01"))],
     )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(ordered_quantity__gte=1),
+                name="po_item_positive_quantity",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(unit_price__gt=0), name="po_item_positive_price"
+            ),
+        ]
 
     @property
     def line_total(self):
@@ -327,16 +397,16 @@ class ReceivingItem(models.Model):
         on_delete=models.PROTECT,
         related_name="receiving_items",
     )
-    received_quantity = models.PositiveIntegerField(
-        validators=[MinValueValidator(1)]
-    )
+    received_quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=["receiving", "purchase_order_item"],
                 name="unique_item_per_receiving",
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(received_quantity__gte=1),
+                name="receiving_positive_quantity",
+            ),
         ]
-
-    

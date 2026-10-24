@@ -1,5 +1,7 @@
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
+from django.db.models.deletion import ProtectedError
 
 from .models import Supplier
 from .permissions import CanManageSuppliers
@@ -15,14 +17,15 @@ class SupplierListCreateView(generics.ListCreateAPIView):
     ]
 
     def get_queryset(self):
-        return Supplier.objects.filter(
-            company=self.request.user.company
-        ).order_by("name")
+        if getattr(self, "swagger_fake_view", False):
+            return Supplier.objects.none()
+        return Supplier.objects.filter(company=self.request.user.company).order_by(
+            "name"
+        )
 
     def perform_create(self, serializer):
-        serializer.save(
-            company=self.request.user.company
-        )
+        serializer.save(company=self.request.user.company)
+
 
 class SupplierDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = SupplierSerializer
@@ -33,6 +36,14 @@ class SupplierDetailView(generics.RetrieveUpdateDestroyAPIView):
     ]
 
     def get_queryset(self):
-        return Supplier.objects.filter(
-            company=self.request.user.company
-        )
+        if getattr(self, "swagger_fake_view", False):
+            return Supplier.objects.none()
+        return Supplier.objects.filter(company=self.request.user.company)
+
+    def perform_destroy(self, instance):
+        try:
+            instance.delete()
+        except ProtectedError as exc:
+            raise ValidationError(
+                "This supplier has procurement records. Deactivate it instead."
+            ) from exc

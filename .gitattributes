@@ -1,0 +1,7 @@
+* text=auto
+# Existing source files use CRLF; recognize it without hiding trailing spaces.
+* whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
