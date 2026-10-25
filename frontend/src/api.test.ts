@@ -1,0 +1,1 @@
+import {describe,it,expect} from 'vitest';import {unpack,ApiError} from './api';describe('API helpers',()=>{it('accepts plain and paginated lists',()=>{expect(unpack([1,2])).toEqual([1,2]);expect(unpack({results:[3]})).toEqual([3]);expect(unpack({detail:'no'})).toEqual([])});it('preserves API status',()=>{expect(new ApiError(403,'Forbidden').status).toBe(403)})});
