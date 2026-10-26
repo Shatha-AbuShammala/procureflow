@@ -1,3 +1,4 @@
+from django.conf import settings
 from apps.audit.models import AuditLog
 from apps.audit.services import log_action
 from decimal import Decimal
@@ -92,8 +93,10 @@ def create_purchase_order(*, user, quote_id, expected_date, items):
         "total_amount": str(po.total_amount),
     },
 )
-    transaction.on_commit(
-    lambda po_id=po.id: send_purchase_order_notification.delay(po_id))
+    if settings.ENABLE_CELERY_NOTIFICATIONS:
+        transaction.on_commit(
+        lambda po_id=po.id: send_purchase_order_notification.delay(po_id)
+    )
 
     return po
 
