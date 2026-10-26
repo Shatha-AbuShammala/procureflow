@@ -42,3 +42,8 @@ STORAGES = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
+
+# Allow React frontend to access Django API
+CORS_ALLOWED_ORIGINS = [
+    "https://procureflow-app.onrender.com",
+]
