@@ -1,92 +1,91 @@
+
 # ProcureFlow
 
-ProcureFlow is a REST API for managing procurement workflows within an organization. It brings purchase requests, supplier quotations, purchase orders, and goods receiving into one process, with role-based access and a record of important changes.
+**Procurement Management System**
 
-The project is built with Django REST Framework and PostgreSQL. It focuses on keeping procurement rules in the backend, separating company data, and making workflow transitions explicit and testable.
+ProcureFlow is a full-stack web application for managing procurement workflows across organizations. It brings purchase requests, approvals, supplier quotations, purchase orders, and goods receiving into one centralized platform.
 
-## What it covers
+Built with **React, TypeScript, Django REST Framework, and PostgreSQL**, the application combines an interactive dashboard with secure authentication, role-based permissions, company-scoped data access, and auditable workflows.
 
-- **Purchase requests:** Employees create requests and submit them for approval. Authorized users can approve or reject them.
-- **Supplier management:** Maintain supplier records within each company.
-- **Requests for quotation (RFQs):** Send RFQs to suppliers, review submitted quotations, and select a quote.
-- **Purchase orders:** Create orders from approved requests and selected quotations.
-- **Goods receiving:** Record received items and track whether an order is partially or fully received.
-- **Access control:** JWT authentication and role-based permissions, with company-scoped access to business data.
-- **Notifications:** Background tasks and scheduled reminders for RFQs using Celery and Redis.
-- **Audit logging:** Record key procurement actions, including the actor, affected record, and before/after values. Audit writes are part of the same database transaction as the associated change.
+## Live Demo
+
+**[Launch ProcureFlow](https://procureflow-app.onrender.com/)**
+
+The application is deployed on Render, with PostgreSQL hosted on Neon. The live environment includes sample procurement data.
+
+## Key Features
+
+- **Interactive Dashboard:** Overview of purchase requests, suppliers, RFQs, and purchase orders.
+- **Purchase Requests:** Create, submit, approve, and reject purchase requests.
+- **Supplier Management:** Manage supplier records and quotations.
+- **RFQs & Quotations:** Request, compare, and select supplier quotations.
+- **Purchase Orders:** Manage purchasing operations and order fulfillment.
+- **Goods Receiving:** Track partially and fully received orders.
+- **Role-Based Access:** JWT authentication with Employee, Manager, Procurement Officer, and Admin roles.
+- **Company-Scoped Data:** Associate users and procurement records with their respective companies.
+- **Audit Logging:** Track important actions and workflow changes.
+- **Background Tasks:** Celery and Redis support notifications and scheduled reminders.
 
 ## Workflow
 
 ```text
-Purchase request
-    |
-    v
-Submit for approval
-    |
-    +---- Rejected
-    |
-    v
+Purchase Request
+       |
+       v
+Submit for Approval
+       |
+       +---- Rejected
+       |
+       v
 Approved
-    |
-    v
-Request for quotation
-    |
-    v
-Supplier quotations
-    |
-    v
-Select quotation
-    |
-    v
-Purchase order
-    |
-    v
-Receive goods
-    |
-    +---- Partially received
-    |
-    v
+       |
+       v
+Request for Quotation
+       |
+       v
+Supplier Quotations
+       |
+       v
+Select Quotation
+       |
+       v
+Purchase Order
+       |
+       v
+Goods Receiving
+       |
+       v
 Completed
 ```
 
-Business rules are enforced on the server rather than relying on clients to send valid status changes.
+Business rules and workflow transitions are validated on the backend.
 
-## Tech stack
+## Tech Stack
 
 | Area | Technology |
 | --- | --- |
-| API | Python 3.11, Django, Django REST Framework |
-| Database | PostgreSQL |
-| Authentication | JWT (Simple JWT) |
-| Background jobs | Celery, Redis, django-celery-beat |
-| API documentation | drf-spectacular, OpenAPI, Swagger UI |
+| Frontend | React, TypeScript, Vite |
+| Backend | Python, Django, Django REST Framework |
+| Database | PostgreSQL, Neon |
+| Authentication | JWT, RBAC |
+| Background Tasks | Celery, Redis |
+| API Documentation | OpenAPI, Swagger UI |
 | Testing | pytest, pytest-django |
-| Container setup | Docker, Docker Compose |
-| Continuous integration | GitHub Actions |
+| DevOps | Docker, GitHub Actions |
+| Deployment | Render |
 
-## Project structure
+## Running Locally
 
-```text
-apps/
-  accounts/        # Users and authentication-related logic
-  companies/       # Company data
-  suppliers/       # Supplier management
-  procurement/     # Requests, RFQs, quotations, orders and receiving
-  notifications/   # Background notifications and reminders
-  audit/           # Audit records and logging service
-  core/            # Shared application code
-config/            # Django settings, URL routing and Celery setup
-tests/             # Automated tests
-Dockerfile
-docker-compose.yml
-requirements.txt
+**1. Clone the repository**
+
+```bash
+git clone https://github.com/Shatha-AbuShammala/procureflow.git
+cd procureflow
 ```
 
-## Running locally
+**2. Backend setup**
 
-You will need Python 3.11, PostgreSQL, and Redis. The commands below assume PowerShell on Windows; adjust the virtual environment activation command for your shell.
-
-**1. Install dependencies**
+Requires Python 3.11 and PostgreSQL.
 
 ```powershell
 python -m venv .venv
@@ -94,24 +93,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-**2. Configure environment variables**
-
-Create a `.env` file in the project root. Use your own values and do not commit this file.
-
-```dotenv
-DJANGO_SECRET_KEY=replace-with-a-random-secret
-DB_NAME=procureflow_db
-DB_USER=procureflow_user
-DB_PASSWORD=replace-with-your-database-password
-DB_HOST=127.0.0.1
-DB_PORT=5432
-CELERY_BROKER_URL=redis://127.0.0.1:6379/0
-CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/1
-```
-
-Create the PostgreSQL database and user to match these settings, and make sure Redis is running.
-
-**3. Apply migrations and start the API**
+Create a `.env` file with your Django secret key and PostgreSQL connection settings. See the Django configuration for the required environment variables.
 
 ```powershell
 $env:DJANGO_SETTINGS_MODULE="config.settings.dev"
@@ -119,66 +101,38 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-The API will be available at `http://127.0.0.1:8000/`.
+**3. Frontend setup**
 
-**4. Run background jobs (optional)**
-
-Start a Celery worker and scheduler in separate terminals with the same environment configuration:
+Open another terminal:
 
 ```powershell
-celery -A config worker --loglevel=info --pool=solo
+cd frontend
+npm install
 ```
+
+Create `frontend/.env`:
+
+```dotenv
+VITE_API_BASE=http://127.0.0.1:8000
+```
+
+Start the application:
 
 ```powershell
-celery -A config beat --loglevel=info
+npm run dev
 ```
 
-The `solo` worker pool is useful for local Windows development. On Linux, the default worker pool can be used.
+Open **http://localhost:5173/**.
 
-## API documentation
+Redis and Celery are required only when running background tasks and scheduled reminders.
 
-With the development server running:
+## Architecture & Testing
 
-- Swagger UI: `http://127.0.0.1:8000/api/docs/`
-- OpenAPI schema: `http://127.0.0.1:8000/api/schema/`
+- React handles the user interface and communicates with the Django REST API.
+- Django enforces authentication, role-based permissions, and procurement business rules.
+- PostgreSQL stores company, user, and procurement records.
+- Audit logs are written within the same database transaction as the associated business operation.
+- Automated backend tests use pytest, with GitHub Actions configured for continuous integration.
+- Docker configuration is included for backend services but has not yet been fully verified.
 
-The schema can also be generated from the command line:
-
-```powershell
-python manage.py spectacular --file schema.yml --validate
-```
-
-JWT authentication is required for protected endpoints. The Swagger interface is the easiest place to explore the available routes, request bodies, and responses.
-
-## Tests
-
-Run the full test suite with:
-
-```powershell
-python -m pytest -q
-```
-
-The tests cover procurement behavior and audit logging, including checks that failed audit writes roll back the corresponding workflow change.
-
-GitHub Actions is configured to run the Django checks and test suite against PostgreSQL and Redis on pushes and pull requests. Check the repository's **Actions** tab for the latest result.
-
-## Docker setup
-
-A Dockerfile and Compose configuration are included for the API, PostgreSQL, Redis, a Celery worker, and Celery Beat.
-
-```bash
-docker compose up --build -d
-```
-
-The container setup has not yet been verified locally because the development machine's Docker engine is unavailable. It should be tested before relying on it for deployment. The current Compose configuration uses development settings and is **not** a production deployment configuration.
-
-## Design notes
-
-- Procurement operations are grouped in service functions where transactions and business validations can be handled together.
-- Queries and permissions are scoped to the authenticated user's company.
-- Audit records are written within the same transaction as the business operation, so a failed audit write does not leave a partially recorded change.
-- Celery handles work that should not block an API request, while the database-backed scheduler supports recurring tasks.
-
-## Status
-
-ProcureFlow is a backend portfolio project. The API, automated tests, audit logging, OpenAPI documentation, and CI configuration are implemented. Docker configuration is included but still needs a successful end-to-end run. Production deployment is not yet documented.
+**[Explore the Live Application](https://procureflow-app.onrender.com/)**
