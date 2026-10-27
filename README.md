@@ -13,6 +13,23 @@ Built with **React, TypeScript, Django REST Framework, and PostgreSQL**, the app
 
 The application is deployed on Render, with PostgreSQL hosted on Neon. The live environment includes sample procurement data.
 
+
+## Demo Accounts
+
+Explore ProcureFlow using the following demo accounts to experience different procurement roles.
+
+**Live Application:** https://procureflow-app.onrender.com/
+
+| Username | Password | Role |
+| --- | --- | --- |
+| demo_employee | 123456 | Employee |
+| demo_manager | 123456 | Manager |
+| demo_procurement | 123456 | Procurement Officer |
+
+These accounts are provided for demonstration purposes only. The application contains fictional sample data.
+
+Each role provides access to different features and procurement workflows based on its permissions.
+
 ## Key Features
 
 - **Interactive Dashboard:** Overview of purchase requests, suppliers, RFQs, and purchase orders.
